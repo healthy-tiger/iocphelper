@@ -1,0 +1,22 @@
+WARN=-Wall
+CFLAGS=-O2 -std=c99 -Iinclude $WARN
+
+rule cc_dll
+    command = gcc -c $in $CFLAGS -DBUILD_DLL -o $out
+
+rule dll
+    command = gcc $in -shared -s -Wl,--dll,--subsystem,windows -o $out
+
+rule def
+    command = dlltool -z $out $in
+
+rule implib
+    command = dlltool -d $in -l $out
+
+build obj/mempool.o : cc_dll src/mempool.c | include/mempool.h
+build obj/iocphelper.o : cc_dll src/iocphelper.c | include/iocphelper.h include/mempool.h
+
+build bin/iocphelper.dll : dll obj/mempool.o obj/iocphelper.o
+
+build obj/iocphelper.def : def obj/iocphelper.o
+build lib/iocphelper.lib : implib obj/iocphelper.def

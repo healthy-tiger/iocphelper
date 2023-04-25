@@ -50,3 +50,7 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+.ninja_log
+obj/
+lib/
+bin/
