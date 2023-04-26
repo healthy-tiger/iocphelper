@@ -4,6 +4,9 @@ CFLAGS=-O2 -std=c99 -Iinclude $WARN
 rule cc_dll
     command = gcc -c $in $CFLAGS -DBUILD_DLL -o $out
 
+rule cc_exe
+    command = gcc -c $in $CFLAGS -o $out
+
 rule dll
     command = gcc $in -shared -s -Wl,--dll,--subsystem,windows -o $out
 
@@ -13,6 +16,9 @@ rule def
 rule implib
     command = dlltool -d $in -l $out
 
+rule exe
+    command = gcc $in -o $out
+
 build obj/mempool.o : cc_dll src/mempool.c | include/mempool.h
 build obj/iocphelper.o : cc_dll src/iocphelper.c | include/iocphelper.h include/mempool.h
 
@@ -20,3 +26,6 @@ build bin/iocphelper.dll : dll obj/mempool.o obj/iocphelper.o
 
 build iocphelper.def : def bin/iocphelper.dll
 build lib/iocphelper.lib : implib iocphelper.def
+
+build obj/file_example.o: cc_exe examples/file_example.c | include/iocphelper.h
+build bin/file_example.exe: exe obj/file_example.o lib/iocphelper.lib
