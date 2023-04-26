@@ -247,6 +247,7 @@ BOOL IOCPHLPR_API IOCPHLPR_Close(IOCPHLPR hlpr)
         CloseHandle(h->iocp);
     }
     MemPoolDispose(h->taskPool);
+    MemPoolFree(hlpPool, hlpr);
     free(h);
     return TRUE;
 }
