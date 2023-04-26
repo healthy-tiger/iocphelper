@@ -74,7 +74,7 @@ BOOL IOCPHLPR_API IOCPHelperShutdown(DWORD dwLinger)
         __IOCPHELPER *hlp = (__IOCPHELPER *)MemPoolGet(hlpPool, i);
         if (hlp != NULL)
         {
-            IOCPHLPR_Close(i, 0);
+            IOCPHLPR_Close(i, dwLinger);
             MemPoolFree(hlpPool, i);
         }
     }
