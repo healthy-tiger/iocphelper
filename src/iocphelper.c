@@ -1,5 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 
+#include <stdio.h>
+
 #include <iocphelper.h>
 #include <mempool.h>
 
@@ -17,6 +19,7 @@ typedef struct tagIOCPHELPER
     ULONG id;
     HANDLE iocp;
     MemPool *taskPool;
+    DWORD linger;
     int nWorkers;
     HANDLE workers[1];
 } __IOCPHELPER;
@@ -38,7 +41,8 @@ BOOL IOCPHLPR_API IOCPHelperStartup(ULONG nMaxInstance)
     if (hlpPool == NULL)
     {
         ULONG max = nMaxInstance;
-        if(max == 0) {
+        if (max == 0)
+        {
             max = IOCPHELPER_MAX_HELPERS;
         }
         MemPool *mp = MemPoolInit(max, sizeof(__IOCPHELPER *));
@@ -51,11 +55,18 @@ BOOL IOCPHLPR_API IOCPHelperStartup(ULONG nMaxInstance)
     return TRUE;
 }
 
-void IOCPHLPR_API IOCPHelperShutdown()
+BOOL IOCPHLPR_API IOCPHelperShutdown(DWORD dwLinger)
 {
     if (hlpPool == NULL)
     {
-        return;
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (dwLinger >= INFINITE)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
     }
 
     for (int i = 0; i < hlpPool->nEntries; i++)
@@ -63,11 +74,12 @@ void IOCPHLPR_API IOCPHelperShutdown()
         __IOCPHELPER *hlp = (__IOCPHELPER *)MemPoolGet(hlpPool, i);
         if (hlp != NULL)
         {
-            IOCPHLPR_Close(i);
+            IOCPHLPR_Close(i, 0);
             MemPoolFree(hlpPool, i);
         }
     }
     MemPoolDispose(hlpPool);
+    return TRUE;
 }
 
 BOOL IOCPHLPR_API IOCPHLPR_New(int nworkers, ULONG nMaxConcurrentTasks, IOCPHLPR *phlpr)
@@ -115,15 +127,11 @@ BOOL IOCPHLPR_API IOCPHLPR_New(int nworkers, ULONG nMaxConcurrentTasks, IOCPHLPR
     h->id = id;
     h->iocp = iocp;
     h->taskPool = taskpool;
+    h->linger = INFINITE;
     h->nWorkers = nworkers;
     for (int i = 0; i < nworkers; i++)
     {
-        h->workers[i] = CreateThread(NULL,
-                                       0,
-                                       WorkerThreadProc,
-                                       (LPVOID)h,
-                                       CREATE_SUSPENDED,
-                                       NULL);
+        h->workers[i] = CreateThread(NULL, 0, WorkerThreadProc, (LPVOID)h, CREATE_SUSPENDED, NULL);
     }
     *ph = h;
     *phlpr = id;
@@ -173,7 +181,7 @@ BOOL IOCPHLPR_API IOCPHLPR_Register(IOCPHLPR hlpr, HANDLE iohandle)
     return TRUE;
 }
 
-BOOL IOCPHLPR_API IOCPHLPR_Wait(IOCPHLPR hlpr, DWORD timeout)
+BOOL IOCPHLPR_API IOCPHLPR_Close(IOCPHLPR hlpr, DWORD dwLinger)
 {
     __IOCPHELPER **ph = (__IOCPHELPER **)MemPoolGet(hlpPool, hlpr);
     if (ph == NULL)
@@ -187,65 +195,33 @@ BOOL IOCPHLPR_API IOCPHLPR_Wait(IOCPHLPR hlpr, DWORD timeout)
         SetLastError(ERROR_INVALID_HANDLE);
         return FALSE;
     }
-    DWORD dwResult = WaitForMultipleObjects(h->nWorkers,
-                                            h->workers,
-                                            TRUE,
-                                            timeout);
-    if (dwResult < WAIT_OBJECT_0 || dwResult >= WAIT_OBJECT_0 + h->nWorkers)
+    if (dwLinger >= INFINITE)
     {
-        return TRUE;
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
     }
-    return FALSE;
-}
 
-BOOL IOCPHLPR_API IOCPHLPR_Stop(IOCPHLPR hlpr)
-{
-    __IOCPHELPER **ph = (__IOCPHELPER **)MemPoolGet(hlpPool, hlpr);
-    if (ph == NULL)
-    {
-        SetLastError(ERROR_INVALID_ACCESS);
-        return FALSE;
-    }
-    __IOCPHELPER *h = *ph;
-    if (h->iocp == NULL)
-    {
-        SetLastError(ERROR_INVALID_HANDLE);
-        return FALSE;
-    }
+    /* Terminate all worker threads */
     for (int i = 0; i < h->nWorkers; i++)
     {
         PostQueuedCompletionStatus(h->iocp, 0, (ULONG_PTR)(TERMINATE_KEY_BASE + i), NULL);
     }
-    return TRUE;
-}
-
-BOOL IOCPHLPR_API IOCPHLPR_Close(IOCPHLPR hlpr)
-{
-    __IOCPHELPER **ph = (__IOCPHELPER **)MemPoolGet(hlpPool, hlpr);
-    if (ph == NULL)
-    {
-        SetLastError(ERROR_INVALID_ACCESS);
-        return FALSE;
-    }
-    __IOCPHELPER *h = *ph;
+    WaitForMultipleObjects(h->nWorkers,
+                           h->workers,
+                           TRUE,
+                           INFINITE);
     for (int i = 0; i < h->nWorkers; i++)
     {
         CloseHandle(h->workers[i]);
     }
-    // Call the completion handler for pending requests.
-    for (int i = 0; i < h->taskPool->nEntries; i++)
-    {
-        PIHLP_OVERLAPPED ovl = MemPoolGet(h->taskPool, i);
-        if (ovl != NULL)
-        {
-            ovl->complete(h->id, ERROR_SUCCESS, ovl->user, 0, (LPOVERLAPPED)ovl);
-            MemPoolFree(h->taskPool, i);
-        }
-    }
-    if (h->iocp != NULL)
-    {
-        CloseHandle(h->iocp);
-    }
+
+    /* Starts a cleaner thread to clean up unfinished IO. */
+    h->linger = dwLinger;
+    HANDLE cleaner = CreateThread(NULL, 0, WorkerThreadProc, (LPVOID)h, 0, NULL);
+    WaitForSingleObject(cleaner, INFINITE);
+    CloseHandle(cleaner);
+
+    CloseHandle(h->iocp);
     MemPoolDispose(h->taskPool);
     MemPoolFree(hlpPool, hlpr);
     free(h);
@@ -255,22 +231,23 @@ BOOL IOCPHLPR_API IOCPHLPR_Close(IOCPHLPR hlpr)
 DWORD WINAPI WorkerThreadProc(LPVOID lpParam)
 {
     __IOCPHELPER *h = (__IOCPHELPER *)lpParam;
-    DWORD bt;
-    ULONG_PTR key;
-    PIHLP_OVERLAPPED ovl;
-    DWORD status;
+    DWORD bt = 0;
+    ULONG_PTR key = 0;
+    PIHLP_OVERLAPPED ovl = NULL;
+    DWORD status = ERROR_SUCCESS;
 
     while (TRUE)
     {
+        bt = 0;
         key = 0;
         ovl = NULL;
         status = ERROR_SUCCESS;
-        bt = 0;
-        if (FALSE == GetQueuedCompletionStatus(h->iocp, &bt, &key, (LPOVERLAPPED *)&ovl, INFINITE))
+
+        if (FALSE == GetQueuedCompletionStatus(h->iocp, &bt, &key, (LPOVERLAPPED *)&ovl, h->linger))
         {
             if (ovl == NULL)
             {
-                continue;
+                break;
             }
             else
             {
@@ -291,8 +268,10 @@ DWORD WINAPI WorkerThreadProc(LPVOID lpParam)
     return 0;
 }
 
-LPOVERLAPPED IOCPHLPR_API IOCPHLPR_NewCtx(IOCPHLPR hlpr, PVOID user, IOCPHLPR_COMPLETE_HANDLER complete) {
-    if(complete == NULL) {
+LPOVERLAPPED IOCPHLPR_API IOCPHLPR_NewCtx(IOCPHLPR hlpr, PVOID user, IOCPHLPR_COMPLETE_HANDLER complete)
+{
+    if (complete == NULL)
+    {
         SetLastError(ERROR_INVALID_PARAMETER);
         return NULL;
     }
@@ -323,8 +302,10 @@ LPOVERLAPPED IOCPHLPR_API IOCPHLPR_NewCtx(IOCPHLPR hlpr, PVOID user, IOCPHLPR_CO
     return (LPOVERLAPPED)ovl;
 }
 
-BOOL IOCPHLPR_API IOCPHLPR_ReleaseCtx(IOCPHLPR hlpr, LPOVERLAPPED ctx) {
-    if(ctx == NULL) {
+BOOL IOCPHLPR_API IOCPHLPR_ReleaseCtx(IOCPHLPR hlpr, LPOVERLAPPED ctx)
+{
+    if (ctx == NULL)
+    {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
@@ -341,7 +322,8 @@ BOOL IOCPHLPR_API IOCPHLPR_ReleaseCtx(IOCPHLPR hlpr, LPOVERLAPPED ctx) {
         return FALSE;
     }
     PIHLP_OVERLAPPED ovl = (PIHLP_OVERLAPPED)ctx;
-    if(FALSE == MemPoolFree(h->taskPool, ovl->id)) {
+    if (FALSE == MemPoolFree(h->taskPool, ovl->id))
+    {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
