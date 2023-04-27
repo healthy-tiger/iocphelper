@@ -4,33 +4,31 @@
 #include <windows.h>
 
 #ifdef BUILD_DLL
-#define IOCPHLPR_API    __declspec( dllexport )
+#define IOCPHELPER_API __declspec(dllexport)
 #else
-#define IOCPHLPR_API    __declspec( dllimport )
+#define IOCPHELPER_API __declspec(dllimport)
 #endif
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-BOOL IOCPHLPR_API IOCPHelperStartup(ULONG nMaxInstance);
-BOOL IOCPHLPR_API IOCPHelperShutdown(DWORD dwLinger);
+    typedef void *IOCPHELPER;
 
-typedef ULONG IOCPHLPR;
+    typedef void (*IOCPHELPER_COMPLETE_HANDLER)(IOCPHELPER helper,
+                                                DWORD status,
+                                                PVOID user,
+                                                DWORD dwBytesTransferred,
+                                                LPOVERLAPPED overlapped);
 
-typedef void (*IOCPHLPR_COMPLETE_HANDLER)(IOCPHLPR hlpr,
-                                          DWORD status,
-                                          PVOID user,
-                                          DWORD dwBytesTransferred,
-                                          LPOVERLAPPED overlapped);
+    IOCPHELPER *IOCPHELPER_API IOCPHelperNew(int nworkers, ULONG nMaxConcurrentTasks);
+    BOOL IOCPHELPER_API IOCPHelperRegisterHandle(IOCPHELPER helper, HANDLE iohandle);
+    BOOL IOCPHELPER_API IOCPHelperShutdown(IOCPHELPER helper, DWORD linger);
+    BOOL IOCPHELPER_API IOCPHelperDispose(IOCPHELPER helper);
 
-BOOL IOCPHLPR_API IOCPHLPR_New(int nworkers, ULONG nMaxConcurrentTasks, IOCPHLPR *phlpr);
-BOOL IOCPHLPR_API IOCPHLPR_Start(IOCPHLPR hlpr);
-BOOL IOCPHLPR_API IOCPHLPR_Register(IOCPHLPR hlpr, HANDLE iohandle);
-BOOL IOCPHLPR_API IOCPHLPR_Close(IOCPHLPR hlpr, DWORD linger);
-
-LPOVERLAPPED IOCPHLPR_API IOCPHLPR_NewCtx(IOCPHLPR hlpr, PVOID user, IOCPHLPR_COMPLETE_HANDLER complete);
-BOOL IOCPHLPR_API IOCPHLPR_ReleaseCtx(IOCPHLPR hlpr, LPOVERLAPPED ctx);
+    LPOVERLAPPED IOCPHELPER_API IOCPHelperNewCtx(IOCPHELPER helper, PVOID user, IOCPHELPER_COMPLETE_HANDLER complete);
+    BOOL IOCPHELPER_API IOCPHelperReleaseCtx(IOCPHELPER helper, LPOVERLAPPED ctx);
 
 #ifdef __cplusplus
 }

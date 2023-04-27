@@ -12,9 +12,9 @@ struct ReadInfo
 
 BOOL WINAPI OnCloseHandler(DWORD dwCtrlType);
 
-void StartReadFile(IOCPHLPR hlpr, const char *filename);
+void StartReadFile(IOCPHELPER hlpr, const char *filename);
 
-void OnRead(IOCPHLPR hlp,
+void OnRead(IOCPHELPER hlp,
             DWORD status,
             PVOID user,
             DWORD dwBytesTransferred,
@@ -24,12 +24,7 @@ HANDLE stopEvent;
 
 int main(int argc, char *argv[])
 {
-    IOCPHLPR hlpr;
-
-    IOCPHelperStartup(0);
-
-    IOCPHLPR_New(10, 100, &hlpr);
-    IOCPHLPR_Start(hlpr);
+    IOCPHELPER hlpr = IOCPHelperNew(10, 100);
 
     stopEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 
@@ -42,9 +37,9 @@ int main(int argc, char *argv[])
 
     WaitForSingleObject(stopEvent, INFINITE);
 
-    IOCPHLPR_Close(hlpr, 1000);
+    IOCPHelperShutdown(hlpr, 1000);
 
-    IOCPHelperShutdown(1000);
+    IOCPHelperDispose(hlpr);
 
     printf("Fin!\n");
 
@@ -57,7 +52,7 @@ BOOL WINAPI OnCloseHandler(DWORD dwCtrlType)
     return TRUE;
 }
 
-void OnRead(IOCPHLPR hlpr,
+void OnRead(IOCPHELPER hlpr,
             DWORD status,
             PVOID user,
             DWORD dwBytesTransferred,
@@ -93,22 +88,22 @@ void OnRead(IOCPHLPR hlpr,
 closefile:
     CloseHandle(ri->hFile);
     free(ri);
-    IOCPHLPR_ReleaseCtx(hlpr, overlapped);
+    IOCPHelperReleaseCtx(hlpr, overlapped);
 }
 
-void StartReadFile(IOCPHLPR hlpr,  const char *filename)
+void StartReadFile(IOCPHELPER hlpr,  const char *filename)
 {
     HANDLE hFile = CreateFile(filename, GENERIC_READ, 0,
                               NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
     if (hFile != INVALID_HANDLE_VALUE)
     {
-        IOCPHLPR_Register(hlpr, hFile);
+        IOCPHelperRegisterHandle(hlpr, hFile);
 
         struct ReadInfo *ri = (struct ReadInfo *)malloc(sizeof(struct ReadInfo));
         ri->filename = filename;
         ri->hFile = hFile;
 
-        LPOVERLAPPED overlapped = IOCPHLPR_NewCtx(hlpr, (PVOID)ri, OnRead);
+        LPOVERLAPPED overlapped = IOCPHelperNewCtx(hlpr, (PVOID)ri, OnRead);
         BOOL bRet = ReadFile(hFile, ri->buf, READ_SIZE, NULL, overlapped);
         if (bRet == FALSE)
         {
@@ -116,7 +111,7 @@ void StartReadFile(IOCPHLPR hlpr,  const char *filename)
             {
                 fprintf(stderr, "ReadFile() failed: %lu\n", GetLastError());
                 CloseHandle(hFile);
-                IOCPHLPR_ReleaseCtx(hlpr, overlapped);
+                IOCPHelperReleaseCtx(hlpr, overlapped);
             }
         }
     }
